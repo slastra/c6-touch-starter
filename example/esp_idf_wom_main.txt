@@ -1,0 +1,166 @@
+// main.c - Example ESP-IDF application using QMI8658A Wake-on-Motion
+#include <stdio.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_system.h"
+#include "esp_log.h"
+#include "esp_sleep.h"
+#include "qmi8658a_wom.h"
+
+static const char *TAG = "MAIN";
+
+// External declaration for the WoM event task
+extern void wom_event_task(void *pvParameters);
+
+// Example: Enter deep sleep with WoM as wake source
+static void enter_deep_sleep_with_wom(void) {
+    ESP_LOGI(TAG, "Configuring deep sleep with WoM wake source...");
+    
+    // Configure wake up source as external GPIO (INT1)
+    esp_sleep_enable_ext0_wakeup(IMU_INT1_GPIO, 1);  // Wake on high level
+    
+    // Optionally configure other wake sources
+    // esp_sleep_enable_timer_wakeup(60 * 1000000);  // Also wake after 60 seconds
+    
+    ESP_LOGI(TAG, "Entering deep sleep. Device will wake on motion...");
+    esp_deep_sleep_start();
+}
+
+// Example: Light sleep with WoM
+static void enter_light_sleep_with_wom(void) {
+    ESP_LOGI(TAG, "Configuring light sleep with WoM wake source...");
+    
+    // Configure GPIO wakeup
+    gpio_wakeup_enable(IMU_INT1_GPIO, GPIO_INTR_HIGH_LEVEL);
+    esp_sleep_enable_gpio_wakeup();
+    
+    ESP_LOGI(TAG, "Entering light sleep. Device will wake on motion...");
+    esp_light_sleep_start();
+    
+    // Code continues here after wake
+    ESP_LOGI(TAG, "Woke up from light sleep!");
+}
+
+void app_main(void) {
+    ESP_LOGI(TAG, "ESP32-C6 QMI8658A Wake-on-Motion Example");
+    
+    // Initialize I2C
+    esp_err_t err = qmi8658a_i2c_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize I2C");
+        return;
+    }
+    
+    // Verify QMI8658A communication
+    err = qmi8658a_verify_device();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to verify QMI8658A device");
+        return;
+    }
+    
+    // Optional: Reset device to known state
+    err = qmi8658a_soft_reset();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to reset device");
+        return;
+    }
+    
+    // Configure WoM parameters
+    qmi8658a_wom_config_t wom_config = {
+        .threshold_mg = 100,        // 100mg threshold (adjust for sensitivity)
+        .blanking_samples = 10,     // 10 samples blanking time
+        .odr_mode = 0xF0,          // 3Hz for lowest power (0xC0=128Hz, 0xD0=21Hz, 0xE0=11Hz, 0xF0=3Hz)
+        .int_pin = IMU_INT1_GPIO   // Use INT1 for interrupt
+    };
+    
+    err = qmi8658a_configure_wom(&wom_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure WoM");
+        return;
+    }
+    
+    // Enable WoM interrupt
+    err = qmi8658a_enable_wom_interrupt(wom_config.int_pin);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to enable WoM interrupt");
+        return;
+    }
+    
+    // Create task to handle WoM events
+    xTaskCreate(wom_event_task, "wom_event", 2048, NULL, 10, NULL);
+    
+    ESP_LOGI(TAG, "WoM initialized successfully!");
+    ESP_LOGI(TAG, "Current consumption should be ~30µA (3Hz) to ~55µA (128Hz)");
+    
+    // Main loop - different operating modes examples
+    while (1) {
+        // Example 1: Stay active and monitor for motion
+        ESP_LOGI(TAG, "Monitoring for motion...");
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        
+        if (qmi8658a_check_wom_event()) {
+            ESP_LOGI(TAG, "Motion detected in main loop!");
+            // Handle motion event
+            // Could transition to full sensor operation here
+        }
+        
+        // Example 2: Enter light sleep (uncomment to use)
+        // enter_light_sleep_with_wom();
+        // ESP_LOGI(TAG, "Woke from light sleep, continuing...");
+        
+        // Example 3: Enter deep sleep (uncomment to use - won't return)
+        // enter_deep_sleep_with_wom();
+    }
+}
+
+// Example: Function to transition from WoM to full sensor operation
+void transition_to_full_operation(void) {
+    ESP_LOGI(TAG, "Transitioning to full sensor operation...");
+    
+    // Exit WoM mode
+    qmi8658a_exit_wom_mode();
+    
+    // Configure for 6DOF operation (accelerometer + gyroscope)
+    // Set accelerometer to normal mode, 1000Hz
+    qmi8658a_write_register(REG_CTRL2, 0x03);  // aODR = 1000Hz, ±2g
+    
+    // Set gyroscope to 896.8Hz, ±256dps
+    qmi8658a_write_register(REG_CTRL3, 0x43);  // gODR = 896.8Hz, ±256dps
+    
+    // Enable both sensors
+    qmi8658a_write_register(REG_CTRL7, 0x03);  // aEN=1, gEN=1
+    
+    ESP_LOGI(TAG, "Full sensor operation enabled");
+    // Now you can read full sensor data at high rate
+}
+
+// Example: Different WoM sensitivity profiles
+void set_high_sensitivity_wom(void) {
+    qmi8658a_wom_config_t config = {
+        .threshold_mg = 50,         // Very sensitive - 50mg
+        .blanking_samples = 5,      // Short blanking
+        .odr_mode = 0xC0,          // 128Hz for fast response
+        .int_pin = IMU_INT1_GPIO
+    };
+    qmi8658a_configure_wom(&config);
+}
+
+void set_low_sensitivity_wom(void) {
+    qmi8658a_wom_config_t config = {
+        .threshold_mg = 200,        // Less sensitive - 200mg
+        .blanking_samples = 20,     // Longer blanking
+        .odr_mode = 0xF0,          // 3Hz for lowest power
+        .int_pin = IMU_INT1_GPIO
+    };
+    qmi8658a_configure_wom(&config);
+}
+
+void set_balanced_wom(void) {
+    qmi8658a_wom_config_t config = {
+        .threshold_mg = 100,        // Moderate sensitivity
+        .blanking_samples = 10,     // Moderate blanking
+        .odr_mode = 0xE0,          // 11Hz balanced power/response
+        .int_pin = IMU_INT1_GPIO
+    };
+    qmi8658a_configure_wom(&config);
+}

@@ -1,0 +1,270 @@
+// qmi8658a_wom.c
+#include "qmi8658a_wom.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+
+static const char *TAG = "QMI8658A";
+static QueueHandle_t wom_evt_queue = NULL;
+
+// ISR handler for WoM interrupt
+static void IRAM_ATTR wom_isr_handler(void* arg) {
+    uint32_t gpio_num = (uint32_t) arg;
+    xQueueSendFromISR(wom_evt_queue, &gpio_num, NULL);
+}
+
+// Initialize I2C master
+esp_err_t qmi8658a_i2c_init(void) {
+    i2c_config_t conf = {
+        .mode = I2C_MODE_MASTER,
+        .sda_io_num = I2C_MASTER_SDA_IO,
+        .scl_io_num = I2C_MASTER_SCL_IO,
+        .sda_pullup_en = GPIO_PULLUP_ENABLE,
+        .scl_pullup_en = GPIO_PULLUP_ENABLE,
+        .master.clk_speed = I2C_MASTER_FREQ_HZ,
+    };
+    
+    esp_err_t err = i2c_param_config(I2C_MASTER_NUM, &conf);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "I2C param config failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    
+    err = i2c_driver_install(I2C_MASTER_NUM, conf.mode, 
+                            I2C_MASTER_RX_BUF_DISABLE, 
+                            I2C_MASTER_TX_BUF_DISABLE, 0);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "I2C driver install failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    
+    ESP_LOGI(TAG, "I2C initialized successfully");
+    return ESP_OK;
+}
+
+// Write single register
+esp_err_t qmi8658a_write_register(uint8_t reg, uint8_t data) {
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (QMI8658A_I2C_ADDR << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_write_byte(cmd, reg, true);
+    i2c_master_write_byte(cmd, data, true);
+    i2c_master_stop(cmd);
+    
+    esp_err_t err = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(1000));
+    i2c_cmd_link_delete(cmd);
+    
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Write register 0x%02X failed: %s", reg, esp_err_to_name(err));
+    }
+    return err;
+}
+
+// Read single register
+esp_err_t qmi8658a_read_register(uint8_t reg, uint8_t *data) {
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (QMI8658A_I2C_ADDR << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_write_byte(cmd, reg, true);
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (QMI8658A_I2C_ADDR << 1) | I2C_MASTER_READ, true);
+    i2c_master_read_byte(cmd, data, I2C_MASTER_NACK);
+    i2c_master_stop(cmd);
+    
+    esp_err_t err = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(1000));
+    i2c_cmd_link_delete(cmd);
+    
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Read register 0x%02X failed: %s", reg, esp_err_to_name(err));
+    }
+    return err;
+}
+
+// Verify device communication
+esp_err_t qmi8658a_verify_device(void) {
+    uint8_t who_am_i, revision;
+    
+    esp_err_t err = qmi8658a_read_register(REG_WHO_AM_I, &who_am_i);
+    if (err != ESP_OK) return err;
+    
+    err = qmi8658a_read_register(REG_REVISION_ID, &revision);
+    if (err != ESP_OK) return err;
+    
+    if (who_am_i != QMI8658A_WHO_AM_I) {
+        ESP_LOGE(TAG, "Wrong WHO_AM_I value: 0x%02X (expected 0x%02X)", 
+                 who_am_i, QMI8658A_WHO_AM_I);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    
+    ESP_LOGI(TAG, "QMI8658A detected - WHO_AM_I: 0x%02X, Revision: 0x%02X", 
+             who_am_i, revision);
+    return ESP_OK;
+}
+
+// Software reset
+esp_err_t qmi8658a_soft_reset(void) {
+    esp_err_t err = qmi8658a_write_register(REG_RESET, 0xB0);
+    if (err != ESP_OK) return err;
+    
+    // Wait for reset to complete (15ms max according to datasheet)
+    vTaskDelay(pdMS_TO_TICKS(20));
+    
+    ESP_LOGI(TAG, "Software reset completed");
+    return ESP_OK;
+}
+
+// Wait for CTRL9 command completion
+static esp_err_t wait_ctrl9_completion(void) {
+    uint8_t status;
+    int timeout = 100;  // 100ms timeout
+    
+    while (timeout-- > 0) {
+        esp_err_t err = qmi8658a_read_register(REG_STATUSINT, &status);
+        if (err != ESP_OK) return err;
+        
+        if (status & 0x80) {  // bit 7 = CmdDone
+            // Acknowledge completion
+            return qmi8658a_write_register(REG_CTRL9, CTRL_CMD_ACK);
+        }
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    
+    ESP_LOGE(TAG, "CTRL9 command timeout");
+    return ESP_ERR_TIMEOUT;
+}
+
+// Configure Wake-on-Motion
+esp_err_t qmi8658a_configure_wom(const qmi8658a_wom_config_t *config) {
+    esp_err_t err;
+    
+    // Step 1: Configure accelerometer for low power mode
+    // ODR modes: 0xC0=128Hz, 0xD0=21Hz, 0xE0=11Hz, 0xF0=3Hz
+    err = qmi8658a_write_register(REG_CTRL2, config->odr_mode);
+    if (err != ESP_OK) return err;
+    
+    // Step 2: Enable accelerometer only (low power for WoM)
+    err = qmi8658a_write_register(REG_CTRL7, 0x01);  // aEN=1, gEN=0
+    if (err != ESP_OK) return err;
+    
+    // Step 3: Write WoM parameters to CAL registers
+    err = qmi8658a_write_register(REG_CAL1_L, 0x01);  // Enable WoM interrupt
+    if (err != ESP_OK) return err;
+    
+    err = qmi8658a_write_register(REG_CAL1_H, 0x00);  // Initial value
+    if (err != ESP_OK) return err;
+    
+    err = qmi8658a_write_register(REG_CAL2_L, config->threshold_mg & 0xFF);
+    if (err != ESP_OK) return err;
+    
+    err = qmi8658a_write_register(REG_CAL2_H, (config->threshold_mg >> 8) & 0xFF);
+    if (err != ESP_OK) return err;
+    
+    err = qmi8658a_write_register(REG_CAL3_L, config->blanking_samples);
+    if (err != ESP_OK) return err;
+    
+    // Step 4: Execute CTRL9 command to apply WoM settings
+    err = qmi8658a_write_register(REG_CTRL9, CTRL_CMD_WRITE_WOM_SETTING);
+    if (err != ESP_OK) return err;
+    
+    // Wait for command completion
+    err = wait_ctrl9_completion();
+    if (err != ESP_OK) return err;
+    
+    ESP_LOGI(TAG, "WoM configured: threshold=%dmg, blanking=%d samples, ODR=0x%02X", 
+             config->threshold_mg, config->blanking_samples, config->odr_mode);
+    
+    return ESP_OK;
+}
+
+// Enable WoM interrupt on specified GPIO
+esp_err_t qmi8658a_enable_wom_interrupt(gpio_num_t int_pin) {
+    esp_err_t err;
+    uint8_t ctrl1;
+    
+    // Configure GPIO for interrupt
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << int_pin),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_POSEDGE  // Rising edge trigger
+    };
+    
+    err = gpio_config(&io_conf);
+    if (err != ESP_OK) return err;
+    
+    // Create queue for ISR events
+    if (wom_evt_queue == NULL) {
+        wom_evt_queue = xQueueCreate(10, sizeof(uint32_t));
+    }
+    
+    // Install GPIO ISR service
+    err = gpio_install_isr_service(0);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {  // Already installed is OK
+        return err;
+    }
+    
+    // Add ISR handler
+    err = gpio_isr_handler_add(int_pin, wom_isr_handler, (void*) int_pin);
+    if (err != ESP_OK) return err;
+    
+    // Enable interrupt output on QMI8658A
+    err = qmi8658a_read_register(REG_CTRL1, &ctrl1);
+    if (err != ESP_OK) return err;
+    
+    if (int_pin == IMU_INT1_GPIO) {
+        ctrl1 |= 0x08;  // Enable INT1 output (bit 3)
+    } else if (int_pin == IMU_INT2_GPIO) {
+        ctrl1 |= 0x10;  // Enable INT2 output (bit 4)
+    }
+    
+    err = qmi8658a_write_register(REG_CTRL1, ctrl1);
+    if (err != ESP_OK) return err;
+    
+    ESP_LOGI(TAG, "WoM interrupt enabled on GPIO%d", int_pin);
+    return ESP_OK;
+}
+
+// Check if WoM event occurred
+bool qmi8658a_check_wom_event(void) {
+    uint8_t status1;
+    
+    if (qmi8658a_read_register(REG_STATUS1, &status1) == ESP_OK) {
+        return (status1 & 0x04) != 0;  // Bit 2 = WoM flag
+    }
+    return false;
+}
+
+// Exit WoM mode
+esp_err_t qmi8658a_exit_wom_mode(void) {
+    // Disable accelerometer
+    esp_err_t err = qmi8658a_write_register(REG_CTRL7, 0x00);  // aEN=0, gEN=0
+    if (err != ESP_OK) return err;
+    
+    ESP_LOGI(TAG, "Exited WoM mode");
+    return ESP_OK;
+}
+
+// Task to handle WoM events
+void wom_event_task(void *pvParameters) {
+    uint32_t gpio_num;
+    
+    while (1) {
+        if (xQueueReceive(wom_evt_queue, &gpio_num, portMAX_DELAY)) {
+            ESP_LOGI(TAG, "WoM event detected on GPIO%d", gpio_num);
+            
+            // Check WoM status
+            if (qmi8658a_check_wom_event()) {
+                ESP_LOGI(TAG, "WoM status confirmed - motion detected!");
+                
+                // Handle wake event here
+                // You can:
+                // - Wake up main processor
+                // - Start full sensor operation
+                // - Send notification
+                // - etc.
+            }
+        }
+    }
+}

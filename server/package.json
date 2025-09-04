@@ -1,0 +1,28 @@
+{
+  "name": "esp32-barcode-resolver",
+  "version": "1.0.0",
+  "description": "MQTT-based barcode lookup service for ESP32-C6 Touch Starter",
+  "main": "barcode-resolver.js",
+  "scripts": {
+    "start": "node barcode-resolver.js",
+    "dev": "nodemon barcode-resolver.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.0.0",
+    "fastify": "^5.5.0",
+    "mqtt": "^5.0.0",
+    "sharp": "^0.34.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.0"
+  },
+  "keywords": [
+    "esp32",
+    "barcode",
+    "mqtt",
+    "upc",
+    "lookup"
+  ],
+  "author": "ESP32-C6 Touch Starter",
+  "license": "MIT"
+}
