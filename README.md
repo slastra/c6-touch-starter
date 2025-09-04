@@ -1,6 +1,6 @@
 # ESP32-C6 Touch Starter
 
-A **production-ready starter template** for the **ESP32-C6-Touch-LCD-1.47** development board from Waveshare. This template provides a clean, modular foundation for building ESP32-C6 touch LCD applications with modern architecture and best practices built-in.
+A production-ready starter template for the ESP32-C6-Touch-LCD-1.47 development board from Waveshare. This template provides a clean, modular foundation for building ESP32-C6 touch LCD applications with modern architecture and best practices built-in.
 
 ![ESP32-C6-Touch-LCD-1.47](https://www.waveshare.com/img/devkit/ESP32-C6-Touch-LCD-1.47/ESP32-C6-Touch-LCD-1.47-1.jpg)
 
@@ -17,28 +17,27 @@ A **production-ready starter template** for the **ESP32-C6-Touch-LCD-1.47** deve
 
 ## Features
 
-This template provides a complete foundation for LVGL-based GUI development with networking:
-
-✅ **Full screen utilization** (172×320 pixels)  
-✅ **7-tile swipeable interface** with professional navigation  
-✅ **Navigation menu** on main tile for direct tile access  
-✅ **Barcode scanning** with auto-scan functionality and activity detection  
-✅ **MQTT barcode resolution** with product lookup and image display  
-✅ **Product image display** with RGB565 format and loading spinner  
-✅ **HTTP image proxy server** for SSL bypass and format conversion  
-✅ **Touch input functionality** with OTA update triggers  
-✅ **Console logging** via USB Serial/JTAG  
-✅ **Visual feedback** system (button color changes)  
-✅ **Brightness control** with interactive slider (dims to 2%)  
-✅ **WiFi connectivity** with automatic reconnection  
-✅ **Real-time sensor visualization** with continuous line charts  
-✅ **Sensor optimization** - tile-aware reading for better performance  
-✅ **Battery monitoring** with voltage display  
-✅ **System status dashboard** with comprehensive information  
-✅ **OTA update functionality** with progress tracking  
-✅ **Dual partition scheme** for safe firmware updates  
-✅ **Modular tile architecture** with individual file separation  
-✅ **Production-ready codebase** with proper error handling  
+- Full screen utilization (172×320 pixels)
+- 7-tile swipeable interface with professional navigation
+- Navigation menu on main tile for direct tile access
+- Barcode scanning with auto-scan functionality and activity detection
+- MQTT barcode resolution with product lookup and image display
+- Product image display with RGB565 format and loading spinner
+- HTTP image proxy server for SSL bypass and format conversion
+- Touch input functionality with OTA update triggers
+- Console logging via USB Serial/JTAG
+- Visual feedback system (button color changes)
+- Brightness control with interactive slider (dims to 2%)
+- WiFi connectivity with automatic reconnection
+- Real-time sensor visualization with continuous line charts
+- Sensor optimization - tile-aware reading for better performance
+- Battery monitoring with voltage display
+- System status dashboard with comprehensive information
+- OTA update functionality with progress tracking
+- Dual partition scheme for safe firmware updates
+- Modular tile architecture with individual file separation
+- Production-ready codebase with proper error handling
+- Security best practices with credential separation and .gitignore protection
 
 ## Quick Start
 
@@ -148,20 +147,6 @@ server/
 └── package.json         # Node.js dependencies
 ```
 
-## Hardware Integration
-
-### QMI8658 IMU Sensor
-- **Full sensor operation** - Both accelerometer and gyroscope at 250Hz
-- **Real-time visualization** - Live charts with color-coded axes  
-- **Tile-aware optimization** - Sensor data only read when viewing relevant tiles
-- **Professional charts** - Continuous lines, proper scaling, clean appearance
-
-### Barcode Scanner Module
-- **Hardware**: Waveshare Barcode Scanner Module (D)
-- **Communication**: UART at 9600 bps (GPIO TX=6, RX=5)  
-- **Features**: Auto-scan mode, device wake-up on scan, MQTT resolution
-- **Integration**: Event-driven with FreeRTOS queues
-
 ## Development
 
 ### Build Environment
@@ -176,11 +161,6 @@ server/
 - **Flash method**: UART (via ESP-IDF extension)
 - **Baud rate**: 115200
 - **Console output**: Real-time logging and events
-
-### VS Code Configuration
-- **ESP-IDF Extension**: Use "UART" flash method
-- **Port**: Set to `/dev/ttyACM0`
-- **Monitor**: Available through extension or `idf.py monitor`
 
 ## Security
 
@@ -211,14 +191,6 @@ This project implements security best practices:
 - Enable certificate bundle in menuconfig
 - Check GitHub repository and release URL accessibility
 - Verify dual OTA partition table configuration
-
-## Contributing
-
-1. Fork the repository
-2. Create your feature branch
-3. Follow the existing code style and architecture
-4. Test thoroughly on hardware  
-5. Submit a pull request
 
 ## License
 
